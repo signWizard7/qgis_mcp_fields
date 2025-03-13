@@ -150,41 +150,55 @@ class QgisMCPClient:
         })
 
 
+def print_json(data):
+    """Imprime datos JSON formateados"""
+    print(json.dumps(data, indent=2))
+
 def main():
-    """Main function for command line usage"""
-    parser = argparse.ArgumentParser(description='QGIS MCP Client')
-    parser.add_argument('--host', default='localhost', help='Server host')
-    parser.add_argument('--port', type=int, default=9876, help='Server port')
-    parser.add_argument('command', help='Command to execute')
-    parser.add_argument('params', nargs='*', help='Command parameters (key=value)')
-    
-    args = parser.parse_args()
-    
-    # Parse params
-    params = {}
-    for param in args.params:
-        if '=' in param:
-            key, value = param.split('=', 1)
-            params[key] = value
-    
-    # Connect to server
-    client = QgisMCPClient(args.host, args.port)
+    # Conectar al servidor QGIS MCP
+    client = QgisMCPClient(host='localhost', port=9876)
     if not client.connect():
-        sys.exit(1)
+        print("No se pudo conectar al servidor QGIS MCP")
+        return
     
     try:
-        # Execute command
-        response = client.send_command(args.command, params)
-        
-        # Print response
-        if response:
-            print(json.dumps(response, indent=2))
+        # Verificar conexión con ping
+        print("Verificando conexión...")
+        response = client.ping()
+        if response and response.get("status") == "success":
+            print("Conexión exitosa")
         else:
-            print("No response from server")
-    finally:
-        # Disconnect
-        client.disconnect()
+            print("Error de conexión")
+            return
+        
+        # Obtener información de QGIS
+        print("\nInformación de QGIS:")
+        qgis_info = client.get_qgis_info()
+        print_json(qgis_info)
+        
+        # Load project
+        print("\nLoad project")
+        load_project = client.load_project("C:/Users/jjsan/OneDrive/Consultoria/Finalizados/electoral_maps/thailand_2007/thailand_2007.qgz")
+        print_json(load_project)
 
+        # Obtener información del proyecto actual
+        print("\nInformación del proyecto:")
+        project_info = client.get_project_info()
+        print_json(project_info)
+
+        # Zoom to layer
+        print("\nZoom to first layer")
+        first_layer = project_info["result"]["layers"][0]["id"]
+        zoom_layer = client.zoom_to_layer(first_layer)
+        print_json(zoom_layer)
+
+        # Render Map to file
+        print("\nRendering image")
+        render_map = client.render_map("C:/Users/jjsan/OneDrive/Consultoria/Finalizados/electoral_maps/thailand_2007/map.png")
+        print_json(render_map)
+        
+    except Exception:
+        print("Error ejecutando comandos")
 
 if __name__ == "__main__":
     main()

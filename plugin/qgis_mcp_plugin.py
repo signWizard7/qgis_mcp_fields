@@ -144,7 +144,8 @@ class QgisMCPServer(QObject):
                 "get_layer_features": self.get_layer_features,
                 "execute_processing": self.execute_processing,
                 "save_project": self.save_project,
-                "render_map": self.render_map
+                "render_map": self.render_map,
+                "create_new_project": self.create_new_project,
             }
             
             handler = handlers.get(cmd_type)
@@ -411,6 +412,31 @@ class QgisMCPServer(QObject):
             }
         else:
             raise Exception(f"Failed to load project from {path}")
+    
+    def create_new_project(self, path, **kwargs):
+        """
+        Creates a new QGIS project and saves it at the specified path.
+        If a project is already loaded, it clears it before creating the new one.
+        
+        :param project_path: Full path where the project will be saved
+                            (e.g., 'C:/path/to/project.qgz')
+        """
+        project = QgsProject.instance()
+        
+        if project.fileName():
+            project.clear()
+        
+        project.setFileName(path)
+        self.iface.mapCanvas().refresh()
+        
+        # Save the project
+        if project.write():
+            return {
+                "created": f"Project created and saved successfully at: {path}",
+                "layer_count": len(project.mapLayers())
+            }
+        else:
+            raise Exception(f"Failed to save project to {path}")
     
     def render_map(self, path, width=800, height=600, **kwargs):
         """Render the current map view to an image"""
