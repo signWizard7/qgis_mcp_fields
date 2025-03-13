@@ -122,7 +122,7 @@ Once the config file has been set on Claude, and the server is running on QGIS, 
 
 ### Example Commands
 
-This is the example I used for the [demo]():
+This is the example I used for the [demo](https://x.com/jjsantoso/status/1900293848271667395):
 
 ```plain
 You have access to the tools to work with QGIS. You will do the following:
