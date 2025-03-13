@@ -223,7 +223,7 @@ class QgisMCPServer(QObject):
         try:
             # Create a local namespace for execution
             namespace = {
-                "qgis": qgis,
+                "qgis": Qgis,
                 "QgsProject": QgsProject,
                 "iface": self.iface,
                 "QgsApplication": QgsApplication,
