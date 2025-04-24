@@ -1,10 +1,11 @@
 import os
 import json
+import csv
 import socket
 import traceback
 from qgis.core import *
 from qgis.gui import *
-from qgis.PyQt.QtCore import QObject, pyqtSignal, QTimer, Qt, QSize
+from qgis.PyQt.QtCore import QObject, pyqtSignal, QTimer, Qt, QSize, QVariant
 from qgis.PyQt.QtWidgets import QAction, QDockWidget, QVBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
 from qgis.PyQt.QtGui import QIcon, QColor
 from qgis.utils import active_plugins
