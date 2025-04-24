@@ -146,6 +146,13 @@ class QgisMCPServer(QObject):
                 "save_project": self.save_project,
                 "render_map": self.render_map,
                 "create_new_project": self.create_new_project,
+                "get_layer_schema": self.get_layer_schema,
+                "get_layer_features_extended": self.get_layer_features_extended,
+                "get_field_statistics": self.get_field_statistics,
+                "update_feature_attribute": self.update_feature_attribute,
+                "create_thematic_map": self.create_thematic_map,
+                "update_features_by_expression": self.update_features_by_expression,
+                "export_attribute_data": self.export_attribute_data,
             }
             
             handler = handlers.get(cmd_type)
