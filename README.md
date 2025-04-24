@@ -120,6 +120,16 @@ Once the config file has been set on Claude, and the server is running on QGIS, 
 - `render_map` - Render the current map view to an image file
 - `execute_code` - Execute arbitrary PyQGIS code provided as a string
 
+#### New Feature Attribute Tools
+
+- `get_layer_schema` - Retrieves the complete schema of a layer, including field definitions and constraints
+- `get_layer_features_extended` - Retrieve features with advanced options like filtering, sorting, and pagination
+- `get_field_statistics` - Get statistical information about a field (min, max, mean, etc.)
+- `update_feature_attribute` - Update an attribute value for a specific feature
+- `create_thematic_map` - Create a thematic map based on attribute values
+- `update_features_by_expression` - Update attribute values for multiple features using an expression
+- `export_attribute_data` - Export attribute data to various formats (CSV, JSON)
+
 ### Example Commands
 
 This is the example I used for the [demo](https://x.com/jjsantoso/status/1900293848271667395):
