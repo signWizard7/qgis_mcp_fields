@@ -1,7 +1,7 @@
 [project]
-name = "qgis-mcp"
-version = "0.1.0"
-description = "Add your description here"
+name = "qgis-mcp-fields"
+version = "0.2.0"
+description = "Enhanced QGIS Model Context Protocol integration with feature attribute capabilities"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
