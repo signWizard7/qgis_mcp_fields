@@ -486,279 +486,453 @@ class QgisMCPServer(QObject):
             raise Exception(f"Render error: {str(e)}")
 
     def get_layer_schema(self, layer_id, **kwargs):
-    """Get the schema of a layer"""
-    project = QgsProject.instance()
-    
-    if layer_id in project.mapLayers():
-        layer = project.mapLayer(layer_id)
+        """Get the schema of a layer"""
+        project = QgsProject.instance()
         
-        if layer.type() != QgsMapLayer.VectorLayer:
-            raise Exception(f"Layer is not a vector layer: {layer_id}")
-        
-        # Get field information
-        fields_info = []
-        for field in layer.fields():
-            field_info = {
-                "name": field.name(),
-                "type": field.typeName(),
-                "length": field.length(),
-                "precision": field.precision(),
-                "comment": field.comment()
+        if layer_id in project.mapLayers():
+            layer = project.mapLayer(layer_id)
+            
+            if layer.type() != QgsMapLayer.VectorLayer:
+                raise Exception(f"Layer is not a vector layer: {layer_id}")
+            
+            # Get field information
+            fields_info = []
+            for field in layer.fields():
+                field_info = {
+                    "name": field.name(),
+                    "type": field.typeName(),
+                    "length": field.length(),
+                    "precision": field.precision(),
+                    "comment": field.comment()
+                }
+                
+                # Add constraints
+                constraints = field.constraints()
+                field_info["constraints"] = {
+                    "not_null": constraints.constraints() & QgsFieldConstraints.ConstraintNotNull,
+                    "unique": constraints.constraints() & QgsFieldConstraints.ConstraintUnique,
+                    "expression": constraints.constraintExpression()
+                }
+                
+                fields_info.append(field_info)
+            
+            # Get primary key information
+            primary_key_fields = layer.primaryKeyAttributes()
+            pk_names = [layer.fields().at(idx).name() for idx in primary_key_fields]
+            
+            # Create schema information
+            schema_info = {
+                "layer_id": layer_id,
+                "name": layer.name(),
+                "fields": fields_info,
+                "primary_key_fields": pk_names,
+                "feature_count": layer.featureCount(),
+                "geometry_type": layer.geometryType(),
+                "wkb_type": layer.wkbType()
             }
             
-            # Add constraints
-            constraints = field.constraints()
-            field_info["constraints"] = {
-                "not_null": constraints.constraints() & QgsFieldConstraints.ConstraintNotNull,
-                "unique": constraints.constraints() & QgsFieldConstraints.ConstraintUnique,
-                "expression": constraints.constraintExpression()
+            return schema_info
+        else:
+            raise Exception(f"Layer not found: {layer_id}")
+        
+    def get_layer_features_extended(self, layer_id, limit=10, offset=0, filter_expression=None, 
+                                   order_by=None, fields=None, **kwargs):
+        """Get features from a layer with advanced options"""
+        project = QgsProject.instance()
+        
+        if layer_id in project.mapLayers():
+            layer = project.mapLayer(layer_id)
+            
+            if layer.type() != QgsMapLayer.VectorLayer:
+                raise Exception(f"Layer is not a vector layer: {layer_id}")
+            
+            # Build request
+            request = QgsFeatureRequest()
+            
+            # Apply limit and offset
+            request.setLimit(limit)
+            if offset > 0:
+                request.setOffset(offset)
+            
+            # Apply field restriction if specified
+            if fields:
+                field_indices = []
+                for field_name in fields:
+                    idx = layer.fields().indexFromName(field_name)
+                    if idx >= 0:
+                        field_indices.append(idx)
+                
+                if field_indices:
+                    request.setSubsetOfAttributes(field_indices)
+            
+            # Apply filter expression
+            if filter_expression:
+                expr = QgsExpression(filter_expression)
+                if expr.hasParserError():
+                    raise Exception(f"Invalid filter expression: {expr.parserErrorString()}")
+                request.setFilterExpression(filter_expression)
+            
+            # Apply ordering
+            if order_by:
+                order_by_clause = []
+                for field in order_by:
+                    is_desc = field.startswith('-')
+                    field_name = field[1:] if is_desc else field
+                    idx = layer.fields().indexFromName(field_name)
+                    if idx >= 0:
+                        order_by_clause.append(QgsFeatureRequest.OrderByClause(
+                            field_name, 
+                            ascending=not is_desc
+                        ))
+                
+                if order_by_clause:
+                    order_by = QgsFeatureRequest.OrderBy(order_by_clause)
+                    request.setOrderBy(order_by)
+            
+            # Get total count matching filter
+            total_count = 0
+            if filter_expression:
+                expr = QgsExpression(filter_expression)
+                context = QgsExpressionContext()
+                context.appendScope(QgsExpressionContextUtils.layerScope(layer))
+                matching_count = 0
+                for feature in layer.getFeatures():
+                    context.setFeature(feature)
+                    if expr.evaluate(context):
+                        matching_count += 1
+                total_count = matching_count
+            else:
+                total_count = layer.featureCount()
+            
+            # Fetch features
+            features = []
+            for feature in layer.getFeatures(request):
+                # Extract attributes
+                attrs = {}
+                for field in layer.fields():
+                    if not fields or field.name() in fields:
+                        attrs[field.name()] = feature.attribute(field.name())
+                
+                # Extract geometry if available
+                geom = None
+                if feature.hasGeometry():
+                    geom = {
+                        "type": feature.geometry().type(),
+                        "wkt": feature.geometry().asWkt(precision=4)
+                    }
+                
+                features.append({
+                    "id": feature.id(),
+                    "attributes": attrs,
+                    "geometry": geom
+                })
+            
+            return {
+                "layer_id": layer_id,
+                "total_count": total_count,
+                "returned_count": len(features),
+                "offset": offset,
+                "limit": limit,
+                "features": features,
+                "fields": [field.name() for field in layer.fields() if not fields or field.name() in fields]
+            }
+        else:
+            raise Exception(f"Layer not found: {layer_id}")
+            
+    def get_field_statistics(self, layer_id, field_name, filter_expression=None, **kwargs):
+        """Get statistics for a field"""
+        project = QgsProject.instance()
+        
+        if layer_id in project.mapLayers():
+            layer = project.mapLayer(layer_id)
+            
+            if layer.type() != QgsMapLayer.VectorLayer:
+                raise Exception(f"Layer is not a vector layer: {layer_id}")
+            
+            # Check if field exists
+            field_idx = layer.fields().indexFromName(field_name)
+            if field_idx < 0:
+                raise Exception(f"Field not found: {field_name}")
+            
+            field = layer.fields().at(field_idx)
+            field_type = field.type()
+            
+            # Build request
+            request = QgsFeatureRequest()
+            request.setSubsetOfAttributes([field_idx])
+            
+            # Apply filter expression
+            if filter_expression:
+                expr = QgsExpression(filter_expression)
+                if expr.hasParserError():
+                    raise Exception(f"Invalid filter expression: {expr.parserErrorString()}")
+                request.setFilterExpression(filter_expression)
+            
+            # Collect values
+            values = []
+            for feature in layer.getFeatures(request):
+                value = feature.attribute(field_name)
+                if value:
+                    values.append(value)
+            
+            stats = {
+                "layer_id": layer_id,
+                "field_name": field_name,
+                "count": len(values),
+                "unique_count": len(set(values))
             }
             
-            fields_info.append(field_info)
-        
-        # Get primary key information
-        primary_key_fields = layer.primaryKeyAttributes()
-        pk_names = [layer.fields().at(idx).name() for idx in primary_key_fields]
-        
-        # Create schema information
-        schema_info = {
-            "layer_id": layer_id,
-            "name": layer.name(),
-            "fields": fields_info,
-            "primary_key_fields": pk_names,
-            "feature_count": layer.featureCount(),
-            "geometry_type": layer.geometryType(),
-            "wkb_type": layer.wkbType()
-        }
-        
-        return schema_info
-    else:
-        raise Exception(f"Layer not found: {layer_id}")
-        
-def get_layer_features_extended(self, layer_id, limit=10, offset=0, filter_expression=None, 
-                               order_by=None, fields=None, **kwargs):
-    """Get features from a layer with advanced options"""
-    project = QgsProject.instance()
-    
-    if layer_id in project.mapLayers():
-        layer = project.mapLayer(layer_id)
-        
-        if layer.type() != QgsMapLayer.VectorLayer:
-            raise Exception(f"Layer is not a vector layer: {layer_id}")
-        
-        # Build request
-        request = QgsFeatureRequest()
-        
-        # Apply limit and offset
-        request.setLimit(limit)
-        if offset > 0:
-            request.setOffset(offset)
-        
-        # Apply field restriction if specified
-        if fields:
-            field_indices = []
-            for field_name in fields:
-                idx = layer.fields().indexFromName(field_name)
-                if idx >= 0:
-                    field_indices.append(idx)
+            # Calculate statistics based on field type
+            if field_type in [QVariant.Int, QVariant.LongLong, QVariant.Double]:
+                # Numeric field
+                if values:
+                    numeric_values = [float(v) for v in values if v is not None]
+                    if numeric_values:
+                        stats.update({
+                            "min": min(numeric_values),
+                            "max": max(numeric_values),
+                            "sum": sum(numeric_values),
+                            "mean": sum(numeric_values) / len(numeric_values)
+                        })
+                        
+                        # Calculate median
+                        sorted_values = sorted(numeric_values)
+                        n = len(sorted_values)
+                        if n % 2 == 0:
+                            median = (sorted_values[n//2 - 1] + sorted_values[n//2]) / 2
+                        else:
+                            median = sorted_values[n//2]
+                        stats["median"] = median
+                        
+                        # Calculate standard deviation
+                        if len(numeric_values) > 1:
+                            mean = stats["mean"]
+                            variance = sum((x - mean) ** 2 for x in numeric_values) / len(numeric_values)
+                            stats["std_dev"] = variance ** 0.5
             
-            if field_indices:
-                request.setSubsetOfAttributes(field_indices)
-        
-        # Apply filter expression
-        if filter_expression:
-            expr = QgsExpression(filter_expression)
-            if expr.hasParserError():
-                raise Exception(f"Invalid filter expression: {expr.parserErrorString()}")
-            request.setFilterExpression(filter_expression)
-        
-        # Apply ordering
-        if order_by:
-            order_by_clause = []
-            for field in order_by:
-                is_desc = field.startswith('-')
-                field_name = field[1:] if is_desc else field
-                idx = layer.fields().indexFromName(field_name)
-                if idx >= 0:
-                    order_by_clause.append(QgsFeatureRequest.OrderByClause(
-                        field_name, 
-                        ascending=not is_desc
-                    ))
+            # Calculate frequency distribution for any field type
+            if values:
+                frequency = {}
+                for value in values:
+                    value_str = str(value)
+                    if value_str in frequency:
+                        frequency[value_str] += 1
+                    else:
+                        frequency[value_str] = 1
+                
+                # Sort by frequency, descending
+                frequency = {k: v for k, v in sorted(frequency.items(), key=lambda item: item[1], reverse=True)}
+                
+                # Limit to top 50 values for efficiency
+                top_values = list(frequency.items())[:50]
+                stats["frequency"] = {k: v for k, v in top_values}
             
-            if order_by_clause:
-                order_by = QgsFeatureRequest.OrderBy(order_by_clause)
-                request.setOrderBy(order_by)
+            return stats
+        else:
+            raise Exception(f"Layer not found: {layer_id}")
+            
+    def update_feature_attribute(self, layer_id, feature_id, field_name, value, **kwargs):
+        """Update an attribute value for a specific feature"""
+        project = QgsProject.instance()
         
-        # Get total count matching filter
-        total_count = 0
-        if filter_expression:
-            expr = QgsExpression(filter_expression)
+        if layer_id in project.mapLayers():
+            layer = project.mapLayer(layer_id)
+            
+            if layer.type() != QgsMapLayer.VectorLayer:
+                raise Exception(f"Layer is not a vector layer: {layer_id}")
+            
+            # Check if field exists
+            field_idx = layer.fields().indexFromName(field_name)
+            if field_idx < 0:
+                raise Exception(f"Field not found: {field_name}")
+            
+            # Check if the layer is editable
+            if not layer.isEditable():
+                layer.startEditing()
+            
+            # Update the attribute
+            if layer.changeAttributeValue(feature_id, field_idx, value):
+                # Commit the changes
+                if layer.commitChanges():
+                    return {
+                        "success": True,
+                        "feature_id": feature_id,
+                        "field_name": field_name,
+                        "value": value
+                    }
+                else:
+                    # Failed to commit, get the errors
+                    errors = layer.commitErrors()
+                    layer.rollBack()
+                    raise Exception(f"Failed to commit changes: {'. '.join(errors)}")
+            else:
+                layer.rollBack()
+                raise Exception(f"Failed to update attribute value for feature {feature_id}")
+        else:
+            raise Exception(f"Layer not found: {layer_id}")
+            
+    def create_thematic_map(self, layer_id, field_name, classification_method='equal_interval', 
+                           num_classes=5, color_ramp='viridis', output_path=None, **kwargs):
+        """Create a thematic map based on attribute values"""
+        project = QgsProject.instance()
+        
+        if layer_id in project.mapLayers():
+            layer = project.mapLayer(layer_id)
+            
+            if layer.type() != QgsMapLayer.VectorLayer:
+                raise Exception(f"Layer is not a vector layer: {layer_id}")
+            
+            # Check if field exists
+            field_idx = layer.fields().indexFromName(field_name)
+            if field_idx < 0:
+                raise Exception(f"Field not found: {field_name}")
+            
+            # Create renderer
+            field = layer.fields().at(field_idx)
+            
+            # Map classification method to QGIS enum
+            method_map = {
+                'equal_interval': QgsClassificationEqualInterval,
+                'quantile': QgsClassificationQuantile,
+                'natural_breaks': QgsClassificationJenks,
+                'standard_deviation': QgsClassificationStandardDeviation,
+                'pretty_breaks': QgsClassificationPrettyBreaks
+            }
+            
+            qgis_method = method_map.get(classification_method)
+            if not qgis_method:
+                raise Exception(f"Invalid classification method: {classification_method}. "
+                               f"Valid options are: {', '.join(method_map.keys())}")
+            
+            # Create a color ramp
+            style = QgsStyle.defaultStyle()
+            ramp_names = style.colorRampNames()
+            
+            if color_ramp not in ramp_names:
+                raise Exception(f"Invalid color ramp: {color_ramp}. "
+                               f"Valid options include: {', '.join(ramp_names[:10])}...")
+            
+            color_ramp_obj = style.colorRamp(color_ramp)
+            
+            # Create a graduated renderer
+            renderer = QgsGraduatedSymbolRenderer(field_name, [])
+            renderer.setClassificationMethod(qgis_method())
+            renderer.setClassAttribute(field_name)
+            renderer.setGraduatedMethod(QgsGraduatedSymbolRenderer.GraduatedColor)
+            renderer.setSourceColorRamp(color_ramp_obj)
+            
+            # Update the renderer with the classes
+            renderer.updateClasses(layer, num_classes)
+            
+            # Apply the renderer to the layer
+            layer.setRenderer(renderer)
+            
+            # Refresh the layer
+            layer.triggerRepaint()
+            
+            # Render to image if requested
+            result = {
+                "success": True,
+                "layer_id": layer_id,
+                "field_name": field_name,
+                "classification_method": classification_method,
+                "num_classes": num_classes,
+                "color_ramp": color_ramp,
+                "classes": []
+            }
+            
+            # Add class information
+            for idx, range in enumerate(renderer.ranges()):
+                result["classes"].append({
+                    "label": range.label(),
+                    "lower_value": range.lowerValue(),
+                    "upper_value": range.upperValue(),
+                    "color": range.symbol().color().name(),
+                    "symbol": range.symbol().symbolLayerCount()
+                })
+            
+            # Render to image if requested
+            if output_path:
+                settings = QgsMapSettings()
+                settings.setLayers([layer])
+                settings.setExtent(layer.extent())
+                settings.setOutputSize(QSize(800, 600))
+                
+                render = QgsMapRendererParallelJob(settings)
+                render.start()
+                render.waitForFinished()
+                
+                img = render.renderedImage()
+                if img.save(output_path):
+                    result["output_path"] = output_path
+                else:
+                    result["error"] = f"Failed to save rendered image to {output_path}"
+            
+            return result
+        else:
+            raise Exception(f"Layer not found: {layer_id}")
+            
+    def update_features_by_expression(self, layer_id, field_name, expression, filter_expression=None, **kwargs):
+        """Update attribute values for multiple features based on an expression"""
+        project = QgsProject.instance()
+        
+        if layer_id in project.mapLayers():
+            layer = project.mapLayer(layer_id)
+            
+            if layer.type() != QgsMapLayer.VectorLayer:
+                raise Exception(f"Layer is not a vector layer: {layer_id}")
+            
+            # Check if field exists
+            field_idx = layer.fields().indexFromName(field_name)
+            if field_idx < 0:
+                raise Exception(f"Field not found: {field_name}")
+            
+            # Check expression validity
+            update_expr = QgsExpression(expression)
+            if update_expr.hasParserError():
+                raise Exception(f"Invalid update expression: {update_expr.parserErrorString()}")
+            
+            # Build request for features to update
+            request = QgsFeatureRequest()
+            
+            # Apply filter expression if provided
+            if filter_expression:
+                filter_expr = QgsExpression(filter_expression)
+                if filter_expr.hasParserError():
+                    raise Exception(f"Invalid filter expression: {filter_expr.parserErrorString()}")
+                request.setFilterExpression(filter_expression)
+            
+            # Start editing
+            if not layer.isEditable():
+                layer.startEditing()
+            
+            # Create expression context
             context = QgsExpressionContext()
             context.appendScope(QgsExpressionContextUtils.layerScope(layer))
-            matching_count = 0
-            for feature in layer.getFeatures():
+            
+            # Update features
+            updated_count = 0
+            features = list(layer.getFeatures(request))
+            total_features = len(features)
+            
+            for feature in features:
                 context.setFeature(feature)
-                if expr.evaluate(context):
-                    matching_count += 1
-            total_count = matching_count
-        else:
-            total_count = layer.featureCount()
-        
-        # Fetch features
-        features = []
-        for feature in layer.getFeatures(request):
-            # Extract attributes
-            attrs = {}
-            for field in layer.fields():
-                if not fields or field.name() in fields:
-                    attrs[field.name()] = feature.attribute(field.name())
-            
-            # Extract geometry if available
-            geom = None
-            if feature.hasGeometry():
-                geom = {
-                    "type": feature.geometry().type(),
-                    "wkt": feature.geometry().asWkt(precision=4)
-                }
-            
-            features.append({
-                "id": feature.id(),
-                "attributes": attrs,
-                "geometry": geom
-            })
-        
-        return {
-            "layer_id": layer_id,
-            "total_count": total_count,
-            "returned_count": len(features),
-            "offset": offset,
-            "limit": limit,
-            "features": features,
-            "fields": [field.name() for field in layer.fields() if not fields or field.name() in fields]
-        }
-    else:
-        raise Exception(f"Layer not found: {layer_id}")
-        
-def get_field_statistics(self, layer_id, field_name, filter_expression=None, **kwargs):
-    """Get statistics for a field"""
-    project = QgsProject.instance()
-    
-    if layer_id in project.mapLayers():
-        layer = project.mapLayer(layer_id)
-        
-        if layer.type() != QgsMapLayer.VectorLayer:
-            raise Exception(f"Layer is not a vector layer: {layer_id}")
-        
-        # Check if field exists
-        field_idx = layer.fields().indexFromName(field_name)
-        if field_idx < 0:
-            raise Exception(f"Field not found: {field_name}")
-        
-        field = layer.fields().at(field_idx)
-        field_type = field.type()
-        
-        # Build request
-        request = QgsFeatureRequest()
-        request.setSubsetOfAttributes([field_idx])
-        
-        # Apply filter expression
-        if filter_expression:
-            expr = QgsExpression(filter_expression)
-            if expr.hasParserError():
-                raise Exception(f"Invalid filter expression: {expr.parserErrorString()}")
-            request.setFilterExpression(filter_expression)
-        
-        # Collect values
-        values = []
-        for feature in layer.getFeatures(request):
-            value = feature.attribute(field_name)
-            if value:
-                values.append(value)
-        
-        stats = {
-            "layer_id": layer_id,
-            "field_name": field_name,
-            "count": len(values),
-            "unique_count": len(set(values))
-        }
-        
-        # Calculate statistics based on field type
-        if field_type in [QVariant.Int, QVariant.LongLong, QVariant.Double]:
-            # Numeric field
-            if values:
-                numeric_values = [float(v) for v in values if v is not None]
-                if numeric_values:
-                    stats.update({
-                        "min": min(numeric_values),
-                        "max": max(numeric_values),
-                        "sum": sum(numeric_values),
-                        "mean": sum(numeric_values) / len(numeric_values)
-                    })
+                new_value = update_expr.evaluate(context)
+                
+                if update_expr.hasEvalError():
+                    continue  # Skip features with evaluation errors
                     
-                    # Calculate median
-                    sorted_values = sorted(numeric_values)
-                    n = len(sorted_values)
-                    if n % 2 == 0:
-                        median = (sorted_values[n//2 - 1] + sorted_values[n//2]) / 2
-                    else:
-                        median = sorted_values[n//2]
-                    stats["median"] = median
-                    
-                    # Calculate standard deviation
-                    if len(numeric_values) > 1:
-                        mean = stats["mean"]
-                        variance = sum((x - mean) ** 2 for x in numeric_values) / len(numeric_values)
-                        stats["std_dev"] = variance ** 0.5
-        
-        # Calculate frequency distribution for any field type
-        if values:
-            frequency = {}
-            for value in values:
-                value_str = str(value)
-                if value_str in frequency:
-                    frequency[value_str] += 1
-                else:
-                    frequency[value_str] = 1
+                if layer.changeAttributeValue(feature.id(), field_idx, new_value):
+                    updated_count += 1
             
-            # Sort by frequency, descending
-            frequency = {k: v for k, v in sorted(frequency.items(), key=lambda item: item[1], reverse=True)}
-            
-            # Limit to top 50 values for efficiency
-            top_values = list(frequency.items())[:50]
-            stats["frequency"] = {k: v for k, v in top_values}
-        
-        return stats
-    else:
-        raise Exception(f"Layer not found: {layer_id}")
-        
-def update_feature_attribute(self, layer_id, feature_id, field_name, value, **kwargs):
-    """Update an attribute value for a specific feature"""
-    project = QgsProject.instance()
-    
-    if layer_id in project.mapLayers():
-        layer = project.mapLayer(layer_id)
-        
-        if layer.type() != QgsMapLayer.VectorLayer:
-            raise Exception(f"Layer is not a vector layer: {layer_id}")
-        
-        # Check if field exists
-        field_idx = layer.fields().indexFromName(field_name)
-        if field_idx < 0:
-            raise Exception(f"Field not found: {field_name}")
-        
-        # Check if the layer is editable
-        if not layer.isEditable():
-            layer.startEditing()
-        
-        # Update the attribute
-        if layer.changeAttributeValue(feature_id, field_idx, value):
-            # Commit the changes
+            # Commit changes
             if layer.commitChanges():
                 return {
                     "success": True,
-                    "feature_id": feature_id,
+                    "layer_id": layer_id,
                     "field_name": field_name,
-                    "value": value
+                    "total_features": total_features,
+                    "updated_features": updated_count
                 }
             else:
                 # Failed to commit, get the errors
@@ -766,281 +940,107 @@ def update_feature_attribute(self, layer_id, feature_id, field_name, value, **kw
                 layer.rollBack()
                 raise Exception(f"Failed to commit changes: {'. '.join(errors)}")
         else:
-            layer.rollBack()
-            raise Exception(f"Failed to update attribute value for feature {feature_id}")
-    else:
-        raise Exception(f"Layer not found: {layer_id}")
-        
-def create_thematic_map(self, layer_id, field_name, classification_method='equal_interval', 
-                       num_classes=5, color_ramp='viridis', output_path=None, **kwargs):
-    """Create a thematic map based on attribute values"""
-    project = QgsProject.instance()
-    
-    if layer_id in project.mapLayers():
-        layer = project.mapLayer(layer_id)
-        
-        if layer.type() != QgsMapLayer.VectorLayer:
-            raise Exception(f"Layer is not a vector layer: {layer_id}")
-        
-        # Check if field exists
-        field_idx = layer.fields().indexFromName(field_name)
-        if field_idx < 0:
-            raise Exception(f"Field not found: {field_name}")
-        
-        # Create renderer
-        field = layer.fields().at(field_idx)
-        
-        # Map classification method to QGIS enum
-        method_map = {
-            'equal_interval': QgsClassificationEqualInterval,
-            'quantile': QgsClassificationQuantile,
-            'natural_breaks': QgsClassificationJenks,
-            'standard_deviation': QgsClassificationStandardDeviation,
-            'pretty_breaks': QgsClassificationPrettyBreaks
-        }
-        
-        qgis_method = method_map.get(classification_method)
-        if not qgis_method:
-            raise Exception(f"Invalid classification method: {classification_method}. "
-                           f"Valid options are: {', '.join(method_map.keys())}")
-        
-        # Create a color ramp
-        style = QgsStyle.defaultStyle()
-        ramp_names = style.colorRampNames()
-        
-        if color_ramp not in ramp_names:
-            raise Exception(f"Invalid color ramp: {color_ramp}. "
-                           f"Valid options include: {', '.join(ramp_names[:10])}...")
-        
-        color_ramp_obj = style.colorRamp(color_ramp)
-        
-        # Create a graduated renderer
-        renderer = QgsGraduatedSymbolRenderer(field_name, [])
-        renderer.setClassificationMethod(qgis_method())
-        renderer.setClassAttribute(field_name)
-        renderer.setGraduatedMethod(QgsGraduatedSymbolRenderer.GraduatedColor)
-        renderer.setSourceColorRamp(color_ramp_obj)
-        
-        # Update the renderer with the classes
-        renderer.updateClasses(layer, num_classes)
-        
-        # Apply the renderer to the layer
-        layer.setRenderer(renderer)
-        
-        # Refresh the layer
-        layer.triggerRepaint()
-        
-        # Render to image if requested
-        result = {
-            "success": True,
-            "layer_id": layer_id,
-            "field_name": field_name,
-            "classification_method": classification_method,
-            "num_classes": num_classes,
-            "color_ramp": color_ramp,
-            "classes": []
-        }
-        
-        # Add class information
-        for idx, range in enumerate(renderer.ranges()):
-            result["classes"].append({
-                "label": range.label(),
-                "lower_value": range.lowerValue(),
-                "upper_value": range.upperValue(),
-                "color": range.symbol().color().name(),
-                "symbol": range.symbol().symbolLayerCount()
-            })
-        
-        # Render to image if requested
-        if output_path:
-            settings = QgsMapSettings()
-            settings.setLayers([layer])
-            settings.setExtent(layer.extent())
-            settings.setOutputSize(QSize(800, 600))
+            raise Exception(f"Layer not found: {layer_id}")
             
-            render = QgsMapRendererParallelJob(settings)
-            render.start()
-            render.waitForFinished()
+    def export_attribute_data(self, layer_id, output_path, format='csv', fields=None, filter_expression=None, **kwargs):
+        """Export attribute data to a file"""
+        project = QgsProject.instance()
+        
+        if layer_id in project.mapLayers():
+            layer = project.mapLayer(layer_id)
             
-            img = render.renderedImage()
-            if img.save(output_path):
-                result["output_path"] = output_path
-            else:
-                result["error"] = f"Failed to save rendered image to {output_path}"
-        
-        return result
-    else:
-        raise Exception(f"Layer not found: {layer_id}")
-        
-def update_features_by_expression(self, layer_id, field_name, expression, filter_expression=None, **kwargs):
-    """Update attribute values for multiple features based on an expression"""
-    project = QgsProject.instance()
-    
-    if layer_id in project.mapLayers():
-        layer = project.mapLayer(layer_id)
-        
-        if layer.type() != QgsMapLayer.VectorLayer:
-            raise Exception(f"Layer is not a vector layer: {layer_id}")
-        
-        # Check if field exists
-        field_idx = layer.fields().indexFromName(field_name)
-        if field_idx < 0:
-            raise Exception(f"Field not found: {field_name}")
-        
-        # Check expression validity
-        update_expr = QgsExpression(expression)
-        if update_expr.hasParserError():
-            raise Exception(f"Invalid update expression: {update_expr.parserErrorString()}")
-        
-        # Build request for features to update
-        request = QgsFeatureRequest()
-        
-        # Apply filter expression if provided
-        if filter_expression:
-            filter_expr = QgsExpression(filter_expression)
-            if filter_expr.hasParserError():
-                raise Exception(f"Invalid filter expression: {filter_expr.parserErrorString()}")
-            request.setFilterExpression(filter_expression)
-        
-        # Start editing
-        if not layer.isEditable():
-            layer.startEditing()
-        
-        # Create expression context
-        context = QgsExpressionContext()
-        context.appendScope(QgsExpressionContextUtils.layerScope(layer))
-        
-        # Update features
-        updated_count = 0
-        features = list(layer.getFeatures(request))
-        total_features = len(features)
-        
-        for feature in features:
-            context.setFeature(feature)
-            new_value = update_expr.evaluate(context)
+            if layer.type() != QgsMapLayer.VectorLayer:
+                raise Exception(f"Layer is not a vector layer: {layer_id}")
             
-            if update_expr.hasEvalError():
-                continue  # Skip features with evaluation errors
+            # Build request
+            request = QgsFeatureRequest()
+            
+            # Apply field restriction if specified
+            if fields:
+                field_indices = []
+                for field_name in fields:
+                    idx = layer.fields().indexFromName(field_name)
+                    if idx >= 0:
+                        field_indices.append(idx)
                 
-            if layer.changeAttributeValue(feature.id(), field_idx, new_value):
-                updated_count += 1
-        
-        # Commit changes
-        if layer.commitChanges():
-            return {
-                "success": True,
-                "layer_id": layer_id,
-                "field_name": field_name,
-                "total_features": total_features,
-                "updated_features": updated_count
-            }
-        else:
-            # Failed to commit, get the errors
-            errors = layer.commitErrors()
-            layer.rollBack()
-            raise Exception(f"Failed to commit changes: {'. '.join(errors)}")
-    else:
-        raise Exception(f"Layer not found: {layer_id}")
-        
-def export_attribute_data(self, layer_id, output_path, format='csv', fields=None, filter_expression=None, **kwargs):
-    """Export attribute data to a file"""
-    project = QgsProject.instance()
-    
-    if layer_id in project.mapLayers():
-        layer = project.mapLayer(layer_id)
-        
-        if layer.type() != QgsMapLayer.VectorLayer:
-            raise Exception(f"Layer is not a vector layer: {layer_id}")
-        
-        # Build request
-        request = QgsFeatureRequest()
-        
-        # Apply field restriction if specified
-        if fields:
-            field_indices = []
-            for field_name in fields:
-                idx = layer.fields().indexFromName(field_name)
-                if idx >= 0:
-                    field_indices.append(idx)
+                if field_indices:
+                    request.setSubsetOfAttributes(field_indices)
             
-            if field_indices:
-                request.setSubsetOfAttributes(field_indices)
-        
-        # Apply filter expression
-        if filter_expression:
-            expr = QgsExpression(filter_expression)
-            if expr.hasParserError():
-                raise Exception(f"Invalid filter expression: {expr.parserErrorString()}")
-            request.setFilterExpression(filter_expression)
-        
-        # Create output directory if it doesn't exist
-        output_dir = os.path.dirname(output_path)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        
-        # Export based on format
-        format = format.lower()
-        if format == 'csv':
-            # Export to CSV
-            with open(output_path, 'w', newline='') as csvfile:
+            # Apply filter expression
+            if filter_expression:
+                expr = QgsExpression(filter_expression)
+                if expr.hasParserError():
+                    raise Exception(f"Invalid filter expression: {expr.parserErrorString()}")
+                request.setFilterExpression(filter_expression)
+            
+            # Create output directory if it doesn't exist
+            output_dir = os.path.dirname(output_path)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            
+            # Export based on format
+            format = format.lower()
+            if format == 'csv':
+                # Export to CSV
+                with open(output_path, 'w', newline='') as csvfile:
+                    # Get field names
+                    if fields:
+                        fieldnames = fields
+                    else:
+                        fieldnames = [field.name() for field in layer.fields()]
+                    
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                    # Write features
+                    for feature in layer.getFeatures(request):
+                        row = {}
+                        for field_name in fieldnames:
+                            row[field_name] = feature.attribute(field_name)
+                        writer.writerow(row)
+                    
+                return {
+                    "success": True,
+                    "layer_id": layer_id,
+                    "format": "csv",
+                    "output_path": output_path,
+                    "fields": fieldnames
+                }
+                
+            elif format == 'json':
+                # Export to JSON
+                features_data = []
+                
                 # Get field names
                 if fields:
                     fieldnames = fields
                 else:
                     fieldnames = [field.name() for field in layer.fields()]
                 
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                
                 # Write features
                 for feature in layer.getFeatures(request):
-                    row = {}
+                    feature_data = {}
                     for field_name in fieldnames:
-                        row[field_name] = feature.attribute(field_name)
-                    writer.writerow(row)
+                        value = feature.attribute(field_name)
+                        feature_data[field_name] = value
+                    features_data.append(feature_data)
                 
-            return {
-                "success": True,
-                "layer_id": layer_id,
-                "format": "csv",
-                "output_path": output_path,
-                "fields": fieldnames
-            }
-            
-        elif format == 'json':
-            # Export to JSON
-            features_data = []
-            
-            # Get field names
-            if fields:
-                fieldnames = fields
+                # Write to file
+                with open(output_path, 'w') as jsonfile:
+                    json.dump(features_data, jsonfile, indent=2)
+                
+                return {
+                    "success": True,
+                    "layer_id": layer_id,
+                    "format": "json",
+                    "output_path": output_path,
+                    "fields": fieldnames
+                }
+                
             else:
-                fieldnames = [field.name() for field in layer.fields()]
-            
-            # Write features
-            for feature in layer.getFeatures(request):
-                feature_data = {}
-                for field_name in fieldnames:
-                    value = feature.attribute(field_name)
-                    feature_data[field_name] = value
-                features_data.append(feature_data)
-            
-            # Write to file
-            with open(output_path, 'w') as jsonfile:
-                json.dump(features_data, jsonfile, indent=2)
-            
-            return {
-                "success": True,
-                "layer_id": layer_id,
-                "format": "json",
-                "output_path": output_path,
-                "fields": fieldnames
-            }
-            
+                raise Exception(f"Unsupported export format: {format}. Supported formats: csv, json")
         else:
-            raise Exception(f"Unsupported export format: {format}. Supported formats: csv, json")
-    else:
-        raise Exception(f"Layer not found: {layer_id}")
+            raise Exception(f"Layer not found: {layer_id}")
 
 class QgisMCPDockWidget(QDockWidget):
     """Dock widget for the QGIS MCP plugin"""
