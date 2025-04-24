@@ -260,7 +260,218 @@ def execute_code(ctx: Context, code: str) -> str:
     result = qgis.send_command("execute_code", {"code": code})
     return json.dumps(result, indent=2)
 
+@mcp.tool()
+def get_layer_schema(ctx: Context, layer_id: str) -> str:
+    """Retrieves the complete schema of a layer.
+    
+    Args:
+        layer_id: The ID of the layer to retrieve the schema for.
+        
+    Returns:
+        A dictionary containing field definitions, constraints, and metadata.
+    """
+    qgis = get_qgis_connection()
+    result = qgis.send_command("get_layer_schema", {"layer_id": layer_id})
+    return json.dumps(result, indent=2)
 
+@mcp.tool()
+def get_layer_features_extended(
+    ctx: Context, 
+    layer_id: str, 
+    limit: int = 10, 
+    offset: int = 0, 
+    filter_expression: str = None,
+    order_by: list = None,
+    fields: list = None
+) -> str:
+    """Retrieves features from a layer with pagination, filtering, and sorting.
+    
+    Args:
+        layer_id: The ID of the layer to retrieve features from.
+        limit: Maximum number of features to return.
+        offset: Number of features to skip.
+        filter_expression: QGIS expression to filter features.
+        order_by: List of field names to sort by, prefixed with - for descending.
+        fields: List of field names to include (default: all fields).
+        
+    Returns:
+        A dictionary containing features, total count, and pagination info.
+    """
+    qgis = get_qgis_connection()
+    params = {
+        "layer_id": layer_id,
+        "limit": limit,
+        "offset": offset
+    }
+    if filter_expression:
+        params["filter_expression"] = filter_expression
+    if order_by:
+        params["order_by"] = order_by
+    if fields:
+        params["fields"] = fields
+        
+    result = qgis.send_command("get_layer_features_extended", params)
+    return json.dumps(result, indent=2)
+
+@mcp.tool()
+def get_field_statistics(
+    ctx: Context, 
+    layer_id: str, 
+    field_name: str,
+    filter_expression: str = None
+) -> str:
+    """Retrieves statistics for a field.
+    
+    Args:
+        layer_id: The ID of the layer.
+        field_name: The name of the field to analyze.
+        filter_expression: Optional expression to filter features.
+        
+    Returns:
+        A dictionary containing statistics appropriate for the field type.
+    """
+    qgis = get_qgis_connection()
+    params = {
+        "layer_id": layer_id,
+        "field_name": field_name
+    }
+    if filter_expression:
+        params["filter_expression"] = filter_expression
+        
+    result = qgis.send_command("get_field_statistics", params)
+    return json.dumps(result, indent=2)
+
+@mcp.tool()
+def update_feature_attribute(
+    ctx: Context,
+    layer_id: str,
+    feature_id: int,
+    field_name: str,
+    value: any
+) -> str:
+    """Updates an attribute value for a specific feature.
+    
+    Args:
+        layer_id: The ID of the layer.
+        feature_id: The ID of the feature to update.
+        field_name: The name of the field to update.
+        value: The new value for the field.
+        
+    Returns:
+        True if the update was successful, False otherwise.
+    """
+    qgis = get_qgis_connection()
+    params = {
+        "layer_id": layer_id,
+        "feature_id": feature_id,
+        "field_name": field_name,
+        "value": value
+    }
+    result = qgis.send_command("update_feature_attribute", params)
+    return json.dumps(result, indent=2)
+
+@mcp.tool()
+def create_thematic_map(
+    ctx: Context,
+    layer_id: str,
+    field_name: str,
+    classification_method: str = 'equal_interval',
+    num_classes: int = 5,
+    color_ramp: str = 'viridis',
+    output_path: str = None
+) -> str:
+    """Creates a thematic map based on attribute values.
+    
+    Args:
+        layer_id: The ID of the layer.
+        field_name: The name of the field to visualize.
+        classification_method: Method for classifying values.
+        num_classes: Number of classes to create.
+        color_ramp: Name of the color ramp to use.
+        output_path: Optional path to save the rendered map.
+        
+    Returns:
+        A dictionary containing the created style and render path if applicable.
+    """
+    qgis = get_qgis_connection()
+    params = {
+        "layer_id": layer_id,
+        "field_name": field_name,
+        "classification_method": classification_method,
+        "num_classes": num_classes,
+        "color_ramp": color_ramp
+    }
+    if output_path:
+        params["output_path"] = output_path
+        
+    result = qgis.send_command("create_thematic_map", params)
+    return json.dumps(result, indent=2)
+
+@mcp.tool()
+def update_features_by_expression(
+    ctx: Context,
+    layer_id: str,
+    field_name: str,
+    expression: str,
+    filter_expression: str = None
+) -> str:
+    """Updates attribute values for multiple features based on an expression.
+    
+    Args:
+        layer_id: The ID of the layer.
+        field_name: The name of the field to update.
+        expression: QGIS expression to calculate the new value.
+        filter_expression: Optional expression to filter features to update.
+        
+    Returns:
+        A dictionary containing the number of features updated.
+    """
+    qgis = get_qgis_connection()
+    params = {
+        "layer_id": layer_id,
+        "field_name": field_name,
+        "expression": expression
+    }
+    if filter_expression:
+        params["filter_expression"] = filter_expression
+        
+    result = qgis.send_command("update_features_by_expression", params)
+    return json.dumps(result, indent=2)
+
+@mcp.tool()
+def export_attribute_data(
+    ctx: Context,
+    layer_id: str,
+    output_path: str,
+    format: str = 'csv',
+    fields: list = None,
+    filter_expression: str = None
+) -> str:
+    """Exports attribute data to a file in the specified format.
+    
+    Args:
+        layer_id: The ID of the layer.
+        output_path: Path to save the exported file.
+        format: Format of the exported file (csv, json, xlsx).
+        fields: List of field names to include (default: all fields).
+        filter_expression: Optional expression to filter features.
+        
+    Returns:
+        A dictionary containing information about the exported file.
+    """
+    qgis = get_qgis_connection()
+    params = {
+        "layer_id": layer_id,
+        "output_path": output_path,
+        "format": format
+    }
+    if fields:
+        params["fields"] = fields
+    if filter_expression:
+        params["filter_expression"] = filter_expression
+        
+    result = qgis.send_command("export_attribute_data", params)
+    return json.dumps(result, indent=2)
 
 def main():
     """Run the MCP server"""
